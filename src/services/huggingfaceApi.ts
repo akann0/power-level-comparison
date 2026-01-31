@@ -1,6 +1,16 @@
 import { Entity, AttributeScore } from '../types';
 
-const HF_API_URL = 'https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2';
+// Proxied through Vite to avoid CORS issues (new router format)
+const HF_API_URL = '/api/huggingface/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction';
+
+/* Gets the HF API key from environment variable */
+function getApiKey(): string {
+  const key = import.meta.env.VITE_HF_API_KEY;
+  if (!key || key === 'your_token_here') {
+    throw new Error('Please set VITE_HF_API_KEY in your .env file');
+  }
+  return key;
+}
 
 /* Attribute query templates for semantic matching */
 const ATTRIBUTE_QUERIES: Record<string, string[]> = {
@@ -11,22 +21,42 @@ const ATTRIBUTE_QUERIES: Record<string, string[]> = {
   influence: ['influential', 'famous', 'impact', 'followers', 'legacy'],
 };
 
-/* Calls Hugging Face API to get text embeddings */
-export async function getEmbeddings(texts: string[], apiKey: string): Promise<number[][]> {
-  const response = await fetch(HF_API_URL, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ inputs: texts, options: { wait_for_model: true } }),
-  });
+/* Calls Hugging Face API to get text embeddings with retry */
+export async function getEmbeddings(texts: string[]): Promise<number[][]> {
+  const apiKey = getApiKey();
+  
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await fetch(HF_API_URL, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ inputs: texts, options: { wait_for_model: true } }),
+      });
 
-  if (!response.ok) {
-    throw new Error(`Hugging Face API error: ${response.status}`);
+      if (response.status === 503) {
+        // Model is loading, wait and retry
+        console.log('Model loading, retrying in 5s...');
+        await new Promise(r => setTimeout(r, 5000));
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HF API error ${response.status}: ${errorText}`);
+      }
+
+      return response.json();
+    } catch (err) {
+      if (attempt === 2) throw err;
+      console.log(`Attempt ${attempt + 1} failed, retrying...`);
+      await new Promise(r => setTimeout(r, 2000));
+    }
   }
-
-  return response.json();
+  
+  throw new Error('Failed after 3 attempts');
 }
 
 /* Calculates cosine similarity between two embedding vectors */
@@ -61,8 +91,7 @@ function chunkText(text: string, maxLength: number = 500): string[] {
 
 /* Analyzes entity using BERT embeddings for semantic attribute scoring */
 export async function analyzeWithBERT(
-  entity: Entity, 
-  apiKey: string
+  entity: Entity
 ): Promise<Record<string, { score: number; confidence: number; evidence: string }>> {
   const text = entity.fullContent || entity.extract || '';
   const chunks = chunkText(text);
@@ -75,7 +104,7 @@ export async function analyzeWithBERT(
   
   for (const [attribute, queries] of Object.entries(ATTRIBUTE_QUERIES)) {
     const allTexts = [...queries, ...chunks];
-    const embeddings = await getEmbeddings(allTexts, apiKey);
+    const embeddings = await getEmbeddings(allTexts);
     
     const queryEmbeddings = embeddings.slice(0, queries.length);
     const chunkEmbeddings = embeddings.slice(queries.length);
@@ -107,13 +136,12 @@ export async function analyzeWithBERT(
 export async function enhanceAttributesWithBERT(
   attributes: AttributeScore[],
   entityA: Entity,
-  entityB: Entity,
-  apiKey: string
+  entityB: Entity
 ): Promise<AttributeScore[]> {
   try {
     const [analysisA, analysisB] = await Promise.all([
-      analyzeWithBERT(entityA, apiKey),
-      analyzeWithBERT(entityB, apiKey),
+      analyzeWithBERT(entityA),
+      analyzeWithBERT(entityB),
     ]);
 
     // Add BERT-derived attributes
@@ -162,7 +190,8 @@ export async function enhanceAttributesWithBERT(
 
     return [...attributes, ...bertAttributes];
   } catch (error) {
-    console.warn('BERT analysis failed, using basic attributes:', error);
+    console.error('BERT analysis failed:', error);
+    alert('BERT analysis failed: ' + (error instanceof Error ? error.message : error));
     return attributes;
   }
 }

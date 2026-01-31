@@ -59,6 +59,11 @@ src/
 │   └── index.ts            # TypeScript interfaces
 ├── App.tsx                 # Main application component
 └── main.tsx                # Entry point
+
+## Backend Server
+
+- `server/` hosts a FastAPI service that wraps the Hugging Face inference endpoint.
+- Run `uvicorn server.app:app --host 0.0.0.0 --port 8080` after setting `HF_API_TOKEN` in `server/.env`.
 ```
 
 ## Future Enhancements (Phase 2+)

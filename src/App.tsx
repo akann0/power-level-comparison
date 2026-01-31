@@ -5,6 +5,7 @@ import { ComparisonResults } from './components/ComparisonResults';
 import { LoadingScreen } from './components/LoadingScreen';
 import { fetchWikipediaPage } from './services/wikipediaApi';
 import { extractAttributes, calculateOverallScore } from './services/attributeExtractor';
+import { enhanceAttributesWithBERT } from './services/huggingfaceApi';
 
 /* Featured matchup suggestions for the landing page */
 const FEATURED_MATCHUPS = [
@@ -39,7 +40,8 @@ function App() {
         throw new Error('Failed to fetch entity data');
       }
 
-      const attributes = extractAttributes(entityA, entityB);
+      const basicAttributes = extractAttributes(entityA, entityB);
+      const attributes = await enhanceAttributesWithBERT(basicAttributes, entityA, entityB);
       const { scoreA, scoreB } = calculateOverallScore(attributes);
       
       const result: ComparisonResult = {
